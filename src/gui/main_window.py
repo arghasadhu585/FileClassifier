@@ -4,7 +4,11 @@ from tkinter import filedialog, messagebox
 
 from ..scanner.folder_scanner import scan_folder
 from ..gui.preview_screen import generate_preview
-from ..organizer.organize_service import organize_files
+from ..organizer.organize_service import (
+    organize_files,
+    undo_last_organization,
+    has_undo_history,
+)
 
 
 ctk.set_appearance_mode("dark")
@@ -108,6 +112,19 @@ class FileClassifierApp(ctk.CTk):
             height=42,
             command=self.preview_organization
         ).grid(row=0, column=1, padx=(7, 0), sticky="ew")
+
+        # Undo button
+        ctk.CTkButton(
+            button_frame,
+            text="Undo Last Organization",
+            height=42,
+            fg_color="#B45309",
+            hover_color="#92400E",
+            command=self.undo_organization
+        ).grid(
+            row=1, column=0, columnspan=2,
+            padx=0, pady=(10, 0), sticky="ew"
+        )
 
         # Status
         self.status_label = ctk.CTkLabel(
@@ -314,7 +331,7 @@ class FileClassifierApp(ctk.CTk):
             command=self.confirm_preview
         ).pack(fill="x", padx=10, pady=15)
 
-    # ---------------- CONFIRM AND ORGANIZE ----------------
+    # ---------------- CONFIRM ORGANIZATION ----------------
 
     def confirm_preview(self):
         if not self.preview_results or not any(
@@ -337,7 +354,8 @@ class FileClassifierApp(ctk.CTk):
             "Files will be moved into category folders inside "
             "the selected folder.\n\n"
             "Existing files will not be overwritten.\n\n"
-            "This action moves files. There is no undo feature yet.\n\n"
+            "You can use Undo while this application remains open.\n"
+            "(Undo history is stored in memory and resets when the app closes.)\n\n"
             "Continue?"
         )
 
@@ -358,14 +376,6 @@ class FileClassifierApp(ctk.CTk):
             skipped = report["skipped"]
             errors = report["errors"]
 
-            self.status_label.configure(
-                text=(
-                    f"Finished: {len(moved)} moved, "
-                    f"{len(skipped)} skipped, "
-                    f"{len(errors)} errors."
-                )
-            )
-
             summary = (
                 "Organization finished!\n\n"
                 f"Moved: {len(moved)}\n"
@@ -377,31 +387,114 @@ class FileClassifierApp(ctk.CTk):
 
             if details:
                 summary += "\n\nDetails:\n"
-                summary += "\n".join(details[:15])
+                summary += "\n".join(details[:12])
 
-                if len(details) > 15:
+                if len(details) > 12:
                     summary += (
-                        f"\n...and {len(details) - 15} more entries."
+                        f"\n...and {len(details) - 12} more entries."
                     )
 
             if errors:
-                messagebox.showwarning(
-                    "Organization Report", summary
-                )
+                messagebox.showwarning("Organization Report", summary)
             else:
-                messagebox.showinfo(
-                    "Organization Report", summary
-                )
+                messagebox.showinfo("Organization Report", summary)
 
-            # Refresh the scan after moving files.
-            self.scan_results = scan_folder(self.selected_folder)
             self.preview_results = {}
-            self.display_scan_results()
+
+            if self.selected_folder:
+                try:
+                    self.scan_results = scan_folder(self.selected_folder)
+                    self.display_scan_results()
+                except (OSError, ValueError) as scan_error:
+                    self.status_label.configure(
+                        text=f"Organization finished, but failed to refresh scan: {scan_error}"
+                    )
+                    return
+
+            self.status_label.configure(
+                text=f"Organization finished: {len(moved)} file(s) moved."
+            )
 
         except (OSError, ValueError, KeyError, TypeError) as error:
             messagebox.showerror(
                 "Organization error",
                 f"An error occurred:\n{error}"
+            )
+
+    # ---------------- UNDO ORGANIZATION ----------------
+
+    def undo_organization(self):
+        if not has_undo_history():
+            messagebox.showinfo(
+                "No Undo Available",
+                "There is no organization operation available to undo.\n\n"
+                "Note: Undo history is stored in memory during the current session "
+                "and is only available after organizing files."
+            )
+            return
+
+        answer = messagebox.askyesno(
+            "Undo Last Organization",
+            "Restore files moved by the most recent organization operation?\n\n"
+            "• Files will return to their original locations.\n"
+            "• Existing files will not be overwritten.\n"
+            "• Undo history is only available during the current application session.\n\n"
+            "Continue?"
+        )
+
+        if not answer:
+            return
+
+        try:
+            report = undo_last_organization()
+
+            restored = report["restored"]
+            skipped = report["skipped"]
+            errors = report["errors"]
+
+            summary = (
+                "Undo operation finished.\n\n"
+                f"Restored: {len(restored)}\n"
+                f"Skipped: {len(skipped)}\n"
+                f"Errors: {len(errors)}"
+            )
+
+            details = restored + skipped + errors
+
+            if details:
+                summary += "\n\nDetails:\n"
+                summary += "\n".join(details[:12])
+
+                if len(details) > 12:
+                    summary += (
+                        f"\n...and {len(details) - 12} more entries."
+                    )
+
+            if errors or skipped:
+                messagebox.showwarning("Undo Report", summary)
+            else:
+                messagebox.showinfo("Undo Report", summary)
+
+            self.preview_results = {}
+
+            if self.selected_folder:
+                try:
+                    self.scan_results = scan_folder(self.selected_folder)
+                    self.display_scan_results()
+                except (OSError, ValueError) as scan_error:
+                    self.status_label.configure(
+                        text=f"Undo finished, but failed to refresh scan: {scan_error}"
+                    )
+                    return
+
+            self.status_label.configure(
+                text=f"Undo finished: {len(restored)} file(s) restored."
+            )
+
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            messagebox.showerror(
+                "Undo Error",
+                f"Could not complete undo:\n{error}"
             )
 
 
